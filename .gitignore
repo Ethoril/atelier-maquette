@@ -1,0 +1,9 @@
+# Systèmes & éditeurs
+.DS_Store
+Thumbs.db
+desktop.ini
+*.tmp
+*.bak
+*.swp
+.vscode/
+.idea/
