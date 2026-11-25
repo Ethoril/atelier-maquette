@@ -353,6 +353,7 @@ export class FrescoStudio {
           <span>📐 TAILLES À GÉNÉRER (300 DPI • TES COTES RÉELLES)</span>
           <span>Case #${activeSpec.adventNum}</span>
         </div>
+        <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;">
         <table class="fresco-spec-table">
           <thead>
             <tr>
@@ -389,6 +390,7 @@ export class FrescoStudio {
             </tr>
           </tbody>
         </table>
+        </div>
         <div style="font-size:10.5px;color:#94a3b8;margin-top:6px;line-height:1.4;">
           Sur tes 24 cases — Murales : <strong>${uniqueWallDims.join(' / ')}</strong> • Côtés : <strong>${uniqueSideDims.join(' / ')}</strong> • Fonds : <strong>${uniqueBackDims.join(' / ')}</strong> • Sols/Plafonds : <strong>${uniqueFloorDims.join(' / ')}</strong>.
           <br/>💡 <em>En mode « 3 Volets », tu génères des images aux ratios classiques (16:9 / 4:3 / 3:4) et l'outil les assemble sur <strong>une seule bande pliée en U</strong> !</em>

@@ -78,24 +78,14 @@ export class Viewer3D {
     this.raycaster = new THREE.Raycaster();
     this.mouse = new THREE.Vector2();
     let downPos = { x: 0, y: 0 };
+    const activePointers = new Set();
+    let hadMultiTouch = false;
+    let lastTap = { time: 0, x: 0, y: 0, pieceId: null };
+    let lastTouchToggleTime = 0;
 
-    this.renderer.domElement.addEventListener('pointerdown', (e) => {
-      downPos = { x: e.clientX, y: e.clientY };
-    });
-
-    this.renderer.domElement.addEventListener('pointerup', (e) => {
-      if (Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y) > 5) return;
-      const hitPieceId = this._raycastPiece(e);
-      this.selectedId = hitPieceId;
-      this.callbacks.onSelect?.(hitPieceId);
-      this.updateSelectionHighlight();
-    });
-
-    // Double-clic sur un bouchon en 3D -> l'ouvrir ou le refermer individuellement
-    this.renderer.domElement.addEventListener('dblclick', (e) => {
-      const hitPieceId = this._raycastPiece(e);
-      if (!hitPieceId) return;
-      const piece = this.pieces.find((p) => p.id === hitPieceId);
+    const togglePlugById = (pieceId) => {
+      if (!pieceId) return;
+      const piece = this.pieces.find((p) => p.id === pieceId);
       if (piece && piece.adventNum) {
         if (this.openedPlugIds.has(piece.id)) {
           this.openedPlugIds.delete(piece.id);
@@ -104,6 +94,58 @@ export class Viewer3D {
         }
         this.applyTransforms();
       }
+    };
+
+    this.renderer.domElement.addEventListener('pointerdown', (e) => {
+      activePointers.add(e.pointerId);
+      if (activePointers.size > 1) {
+        hadMultiTouch = true;
+      }
+      downPos = { x: e.clientX, y: e.clientY };
+    });
+
+    this.renderer.domElement.addEventListener('pointercancel', (e) => {
+      activePointers.delete(e.pointerId);
+      if (activePointers.size === 0) hadMultiTouch = false;
+    });
+
+    this.renderer.domElement.addEventListener('pointerup', (e) => {
+      activePointers.delete(e.pointerId);
+      if (hadMultiTouch) {
+        if (activePointers.size === 0) hadMultiTouch = false;
+        return;
+      }
+
+      const maxMove = e.pointerType === 'touch' ? 12 : 5;
+      if (Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y) > maxMove) return;
+
+      const hitPieceId = this._raycastPiece(e);
+      this.selectedId = hitPieceId;
+      this.callbacks.onSelect?.(hitPieceId);
+      this.updateSelectionHighlight();
+
+      // Détection fiable du double-tap sur une case (#1-#25) en tactile (iOS/Android)
+      if (e.pointerType === 'touch' && hitPieceId) {
+        const now = Date.now();
+        if (
+          now - lastTap.time < 360 &&
+          lastTap.pieceId === hitPieceId &&
+          Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 34
+        ) {
+          togglePlugById(hitPieceId);
+          lastTap = { time: 0, x: 0, y: 0, pieceId: null };
+          lastTouchToggleTime = now;
+        } else {
+          lastTap = { time: now, x: e.clientX, y: e.clientY, pieceId: hitPieceId };
+        }
+      }
+    });
+
+    // Double-clic souris sur un bouchon en 3D -> l'ouvrir ou le refermer individuellement
+    this.renderer.domElement.addEventListener('dblclick', (e) => {
+      if (Date.now() - lastTouchToggleTime < 450) return;
+      const hitPieceId = this._raycastPiece(e);
+      togglePlugById(hitPieceId);
     });
   }
 
@@ -134,6 +176,7 @@ export class Viewer3D {
 
   resize() {
     const rect = this.container.getBoundingClientRect();
+    if (rect.width < 10 || rect.height < 10) return;
     const w = Math.max(250, rect.width);
     const h = Math.max(220, rect.height);
     this.camera.aspect = w / h;

@@ -2,9 +2,13 @@
 <html lang="fr">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#111827" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Atelier Maquette" />
   <meta name="description" content="Atelier interactif 2D & 3D autonome pour concevoir, découper (calepinage plaques XPS 300×200 mm) et imprimer les fresques A4 1:1 d'un Temple Romain Calendrier de l'Avent (25 cases)." />
-  <title>Atelier Temple Romain — Calendrier de l'Avent (Plan 2D &amp; Volume 3D)</title>
+  <title>Atelier Maquette — Plan 2D, Volume 3D &amp; Calepinage XPS</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🏛️</text></svg>" />
   <link rel="stylesheet" href="./styles.css" />
   <script type="importmap">
@@ -16,18 +20,28 @@
     }
   </script>
 </head>
-<body>
+<body data-mobile-view="3d">
   <!-- BARRE SUPÉRIEURE -->
   <header class="topbar">
     <div class="brand">
       <div class="brand-icon">🏛️</div>
-      <div>
-        <h1>Atelier Temple Romain <span class="tag-advent">Calendrier 25 Cases</span></h1>
+      <div class="brand-text">
+        <h1>Atelier Maquette <span class="tag-advent">Temple 25 Cases</span></h1>
         <div id="global-dimensions-badge" class="sub-stats">Chargement du plan...</div>
       </div>
     </div>
 
-    <!-- Bascule affichage Split 2D/3D -->
+    <!-- Contrôles rapides mobile (masqués sur desktop) -->
+    <div class="mobile-topbar-actions">
+      <button id="btn-mobile-undo" class="mobile-icon-btn" title="Annuler" aria-label="Annuler" disabled>↩</button>
+      <button id="btn-mobile-redo" class="mobile-icon-btn" title="Rétablir" aria-label="Rétablir" disabled>↪</button>
+      <button id="btn-mobile-sheet" class="mobile-icon-btn accent" title="Outils, filtres &amp; sauvegarde" aria-label="Outils, filtres et sauvegarde">
+        <span>☰</span>
+        <span id="mobile-filter-badge" class="mobile-badge hidden"></span>
+      </button>
+    </div>
+
+    <!-- Bascule affichage Split 2D/3D (desktop) -->
     <div class="toolbar-group">
       <span class="group-label">Affichage :</span>
       <div class="segmented">
@@ -37,7 +51,7 @@
       </div>
     </div>
 
-    <!-- Mode de coloration -->
+    <!-- Mode de coloration (desktop) -->
     <div class="toolbar-group">
       <span class="group-label">Couleurs :</span>
       <select id="select-color-mode" class="select-ui">
@@ -46,7 +60,7 @@
       </select>
     </div>
 
-    <!-- Historique & Import/Export -->
+    <!-- Historique & Import/Export (desktop) -->
     <div class="toolbar-group">
       <button id="btn-recalc-openings" class="btn-compact accent" title="Recalculer la largeur des 24 ouvertures et la position des cloisons selon la longueur actuelle de la Cella">📏 Recalculer les 24 Ouvertures</button>
       <button id="btn-undo" class="btn-icon" title="Annuler (Ctrl+Z)" disabled>↩ Annuler</button>
@@ -57,7 +71,7 @@
     </div>
   </header>
 
-  <!-- BARRE DE FILTRES PAR SOUS-ENSEMBLE ARCHITECTURAL -->
+  <!-- BARRE DE FILTRES PAR SOUS-ENSEMBLE ARCHITECTURAL (desktop) -->
   <section class="filterbar">
     <div class="filter-left">
       <span class="filter-title">Filtrer les sous-ensembles (2D &amp; 3D) :</span>
@@ -74,9 +88,9 @@
         <div class="viewport-toolbar">
           <!-- Choix de la vue 2D (Dessus, Côté, Face) -->
           <div class="segmented">
-            <button data-view2d="XY" class="active" title="Élévation latérale (Longueur X × Hauteur Y)">Vue de Côté (Flanc Cases)</button>
-            <button data-view2d="XZ" title="Plan horizontal vu du dessus (Longueur X × Largeur Z)">Vue de Dessus (Plan)</button>
-            <button data-view2d="ZY" title="Élévation frontale (Largeur Z × Hauteur Y)">Vue de Face (Façade)</button>
+            <button data-view2d="XY" class="active" title="Élévation latérale (Longueur X × Hauteur Y)">Côté</button>
+            <button data-view2d="XZ" title="Plan horizontal vu du dessus (Longueur X × Largeur Z)">Dessus</button>
+            <button data-view2d="ZY" title="Élévation frontale (Largeur Z × Hauteur Y)">Face</button>
           </div>
 
           <!-- Outils d'édition / dessin 2D -->
@@ -115,7 +129,7 @@
         <div class="slice-bar">
           <label class="slice-toggle">
             <input type="checkbox" id="chk-slice" />
-            <span>Isoler une tranche de profondeur (Coupe 2D)</span>
+            <span>Coupe 2D (tranche)</span>
           </label>
           <div id="slice-controls" class="slice-sliders hidden">
             <span>De</span>
@@ -128,6 +142,7 @@
 
         <div class="canvas-wrap">
           <canvas id="canvas-2d"></canvas>
+          <div class="overlay-2d-hint mobile-only">1 doigt : sélectionner / glisser • 2 doigts : zoom &amp; panoramique</div>
         </div>
       </section>
 
@@ -135,17 +150,17 @@
       <section class="panel-3d">
         <div class="viewport-toolbar">
           <div class="explode-control">
-            <span>💥 Vue Éclatée :</span>
+            <span>💥 Éclaté :</span>
             <input type="range" id="rng-explode" min="0" max="100" value="0" />
             <strong id="lbl-explode">0%</strong>
           </div>
 
-          <button id="btn-toggle-plugs" class="btn-compact accent">Ouvrir les 25 Cases</button>
+          <button id="btn-toggle-plugs" class="btn-compact accent">Ouvrir 25 Cases</button>
           <button id="btn-xray" class="btn-compact" title="Rendre les murs semi-transparents pour voir le casier interne">Rayons X</button>
           <button id="btn-labels-3d" class="btn-compact" title="Afficher tous les numéros P1, P2... en badges flottants au premier plan en 3D">🏷️ N° 3D</button>
 
           <div class="segmented">
-            <button data-cam3d="iso">3D Iso</button>
+            <button data-cam3d="iso">Iso</button>
             <button data-cam3d="front">Face</button>
             <button data-cam3d="side">Flanc</button>
             <button data-cam3d="top">Dessus</button>
@@ -153,7 +168,8 @@
         </div>
 
         <div id="viewport-3d" class="canvas-wrap">
-          <div class="overlay-3d-hint">Clic : sélectionner une pièce • Double-clic sur une case (#1-#25) : ouvrir/fermer</div>
+          <div class="overlay-3d-hint desktop-only">Clic : sélectionner une pièce • Double-clic sur une case (#1-#25) : ouvrir/fermer</div>
+          <div class="overlay-3d-hint mobile-only">1 doigt : orbite • 2 doigts : zoom • 2× tap case : ouvrir</div>
         </div>
       </section>
     </div>
@@ -290,6 +306,75 @@
       </div>
     </aside>
   </main>
+
+  <!-- BARRE FLOTTANTE DE PIÈCE SÉLECTIONNÉE (MOBILE) -->
+  <div id="mobile-selection-bar" class="mobile-selection-bar hidden" aria-live="polite"></div>
+
+  <!-- NAVIGATION BASSE FIXE (MOBILE) -->
+  <nav id="mobile-bottom-nav" class="mobile-bottom-nav" aria-label="Navigation principale mobile">
+    <button data-mobile-view="3d" class="active">
+      <span class="mnav-ico">🧊</span>
+      <span class="mnav-lbl">3D</span>
+    </button>
+    <button data-mobile-view="2d">
+      <span class="mnav-ico">✏️</span>
+      <span class="mnav-lbl">2D</span>
+    </button>
+    <button data-mobile-view="cutlist">
+      <span class="mnav-ico">🪚</span>
+      <span class="mnav-lbl">Découpes</span>
+    </button>
+    <button data-mobile-view="checklist" id="mobile-nav-checklist">
+      <span class="mnav-ico">✅</span>
+      <span class="mnav-lbl" id="mobile-nav-checklist-lbl">Suivi</span>
+    </button>
+    <button data-mobile-view="fresco">
+      <span class="mnav-ico">🎨</span>
+      <span class="mnav-lbl">Fresques</span>
+    </button>
+  </nav>
+
+  <!-- TIROIR OUTILS, FILTRES & SAUVEGARDE (MOBILE) -->
+  <div id="mobile-sheet-backdrop" class="mobile-sheet-backdrop hidden" role="dialog" aria-modal="true" aria-label="Outils et filtres">
+    <div id="mobile-sheet" class="mobile-sheet">
+      <div class="mobile-sheet-handle"></div>
+      <div class="mobile-sheet-head">
+        <strong>⚙️ Outils, Filtres &amp; Plan</strong>
+        <button id="btn-close-mobile-sheet" class="mobile-icon-btn" aria-label="Fermer">✕</button>
+      </div>
+
+      <div class="mobile-sheet-body">
+        <div class="mobile-sheet-section">
+          <div class="section-subtitle" style="margin-top:0;">Mode de coloration (2D &amp; 3D)</div>
+          <div class="segmented mobile-full-seg" style="margin-top:8px;">
+            <button data-mobile-color="group" class="active">Par Zone</button>
+            <button data-mobile-color="thickness">Par Épaisseur (6/10/20 mm)</button>
+          </div>
+          <div id="mobile-color-legend" class="legend-row" style="margin-top:8px;"></div>
+        </div>
+
+        <div class="mobile-sheet-section">
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <div class="section-subtitle" style="margin-top:0;border:none;padding:0;">Sous-ensembles visibles</div>
+            <button id="btn-mobile-show-all-groups" class="btn-compact">Tout afficher</button>
+          </div>
+          <div id="mobile-group-filters" class="chips-row" style="margin-top:8px;"></div>
+        </div>
+
+        <div class="mobile-sheet-section">
+          <div class="section-subtitle" style="margin-top:0;">Actions &amp; Sauvegarde</div>
+          <div class="mobile-sheet-actions">
+            <button id="btn-mobile-recalc" class="mobile-action-btn accent">📏 Recalculer les 24 Ouvertures</button>
+            <button id="btn-mobile-open-generator" class="mobile-action-btn">⚙️ Paramètres globaux du Temple</button>
+            <div class="mobile-sheet-actions-row">
+              <button id="btn-mobile-export" class="mobile-action-btn">💾 Exporter JSON</button>
+              <button id="btn-mobile-import" class="mobile-action-btn">📂 Importer JSON</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <script type="module" src="./js/app.js"></script>
 </body>

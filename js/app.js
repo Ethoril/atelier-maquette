@@ -43,6 +43,10 @@ class TemplePlannerApp {
     this.history = [];
     this.redoStack = [];
     this.layoutMode = 'split'; // 'split' | '2d' | '3d'
+    this.mobileQuery = window.matchMedia('(max-width: 900px)');
+    this.mobileView = '3d'; // '3d' | '2d' | 'panel'
+    this.activeSidebarTab = 'inspector';
+    this._mobile2dFitted = false;
 
     this._loadInitialState();
     this._initComponents();
@@ -386,10 +390,16 @@ class TemplePlannerApp {
   }
 
   _updateHistoryButtons() {
+    const undoDisabled = this.history.length === 0;
+    const redoDisabled = this.redoStack.length === 0;
     const btnUndo = document.getElementById('btn-undo');
     const btnRedo = document.getElementById('btn-redo');
-    if (btnUndo) btnUndo.disabled = this.history.length === 0;
-    if (btnRedo) btnRedo.disabled = this.redoStack.length === 0;
+    const btnMobileUndo = document.getElementById('btn-mobile-undo');
+    const btnMobileRedo = document.getElementById('btn-mobile-redo');
+    if (btnUndo) btnUndo.disabled = undoDisabled;
+    if (btnRedo) btnRedo.disabled = redoDisabled;
+    if (btnMobileUndo) btnMobileUndo.disabled = undoDisabled;
+    if (btnMobileRedo) btnMobileRedo.disabled = redoDisabled;
   }
 
   _initComponents() {
@@ -412,6 +422,7 @@ class TemplePlannerApp {
         this._renderChecklist();
         this.frescoStudio?.render();
         this._updateGlobalStats();
+        this._renderMobileSelectionBar();
         this._saveState();
       },
       onCommitHistory: () => this.commitHistory(),
@@ -442,6 +453,7 @@ class TemplePlannerApp {
     }
     this._renderInspector();
     this._highlightCutListRow();
+    this._renderMobileSelectionBar();
   }
 
   _refreshAll() {
@@ -454,6 +466,7 @@ class TemplePlannerApp {
     this._renderChecklist();
     this.frescoStudio?.render();
     this._updateGlobalStats();
+    this._renderMobileSelectionBar();
     this._saveState();
   }
 
@@ -605,15 +618,15 @@ class TemplePlannerApp {
     // 8. Onglets du panneau droit (Inspecteur Pièce / Paramètres Temple / Liste de Découpe)
     document.querySelectorAll('[data-tab]').forEach((btn) => {
       btn.addEventListener('click', () => {
-        document.querySelectorAll('[data-tab]').forEach((b) => b.classList.remove('active'));
-        document.querySelectorAll('.sidebar-pane').forEach((p) => p.classList.remove('active'));
-        btn.classList.add('active');
-        document.getElementById(`pane-${btn.dataset.tab}`)?.classList.add('active');
+        this.activateSidebarTab(btn.dataset.tab);
       });
     });
 
     // 8bis. Redimensionnement & Agrandissement (Normal / Large / Plein écran) du panneau droit
     this._bindSidebarResize();
+
+    // 8ter. Interface Mobile (navigation basse, tiroir outils/filtres & barre flottante pièce)
+    this._bindMobileUI();
 
     // 9. Formulaire du Générateur Paramétrique
     this._bindGeneratorForm();
@@ -672,9 +685,212 @@ class TemplePlannerApp {
     });
 
     setTimeout(() => {
-      this.editor2d.fitView();
-      this.viewer3d.resetCamera('iso');
+      if (this.mobileQuery.matches) {
+        this.setMobileView('3d');
+        this.viewer3d.resetCamera('iso');
+      } else {
+        this.editor2d.fitView();
+        this.viewer3d.resetCamera('iso');
+      }
     }, 60);
+  }
+
+  activateSidebarTab(tabName) {
+    if (!tabName) return;
+    this.activeSidebarTab = tabName;
+    document.querySelectorAll('[data-tab]').forEach((b) => {
+      b.classList.toggle('active', b.dataset.tab === tabName);
+    });
+    document.querySelectorAll('.sidebar-pane').forEach((p) => {
+      p.classList.toggle('active', p.id === `pane-${tabName}`);
+    });
+    if (this.mobileView === 'panel') {
+      this._syncMobileNavActive();
+      this._renderMobileSelectionBar();
+    }
+  }
+
+  _syncMobileNavActive() {
+    const activeKey = this.mobileView === 'panel' ? this.activeSidebarTab : this.mobileView;
+    document.querySelectorAll('#mobile-bottom-nav [data-mobile-view]').forEach((btn) => {
+      btn.classList.toggle('active', btn.dataset.mobileView === activeKey);
+    });
+  }
+
+  setMobileView(view, targetTab = null) {
+    this.mobileView = view;
+    document.querySelector('.main-layout')?.classList.remove('sidebar-fullscreen');
+    document.body.dataset.mobileView = view;
+    if (targetTab) {
+      this.activateSidebarTab(targetTab);
+    }
+    this._syncMobileNavActive();
+    this._renderMobileSelectionBar();
+
+    requestAnimationFrame(() => {
+      if (view === '3d') {
+        this.viewer3d.resize();
+      } else if (view === '2d') {
+        this.editor2d.resize();
+        if (!this._mobile2dFitted) {
+          this.editor2d.fitView();
+          this._mobile2dFitted = true;
+        }
+      }
+    });
+  }
+
+  _setMobileSheetOpen(open) {
+    const backdrop = document.getElementById('mobile-sheet-backdrop');
+    if (!backdrop) return;
+    backdrop.classList.toggle('hidden', !open);
+  }
+
+  _bindMobileUI() {
+    // 1. Navigation basse fixe (3D / 2D / Découpes / Suivi / Fresques)
+    document.querySelectorAll('#mobile-bottom-nav [data-mobile-view]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const target = btn.dataset.mobileView;
+        if (target === '3d' || target === '2d') {
+          this.setMobileView(target);
+        } else {
+          this.setMobileView('panel', target);
+        }
+      });
+    });
+
+    // 2. Boutons rapides en-tête mobile (Annuler / Rétablir / Outils & Filtres)
+    document.getElementById('btn-mobile-undo')?.addEventListener('click', () => this.undo());
+    document.getElementById('btn-mobile-redo')?.addEventListener('click', () => this.redo());
+    document.getElementById('btn-mobile-sheet')?.addEventListener('click', () => this._setMobileSheetOpen(true));
+    document.getElementById('btn-close-mobile-sheet')?.addEventListener('click', () => this._setMobileSheetOpen(false));
+
+    const backdrop = document.getElementById('mobile-sheet-backdrop');
+    backdrop?.addEventListener('click', (e) => {
+      if (e.target === backdrop) this._setMobileSheetOpen(false);
+    });
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') this._setMobileSheetOpen(false);
+    });
+
+    // 3. Mode de coloration dans le tiroir mobile
+    document.querySelectorAll('[data-mobile-color]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const mode = btn.dataset.mobileColor;
+        const sel = document.getElementById('select-color-mode');
+        if (sel) sel.value = mode;
+        this.editor2d.setColorMode(mode);
+        this.viewer3d.setColorMode(mode);
+        this._renderLegend(mode);
+      });
+    });
+
+    // 4. Tout afficher (réinitialiser les filtres de groupes)
+    document.getElementById('btn-mobile-show-all-groups')?.addEventListener('click', () => {
+      for (const k of Object.keys(GROUP_META)) {
+        this.editor2d.visibleGroups.add(k);
+        this.viewer3d.visibleGroups.add(k);
+      }
+      this._renderGroupFilters();
+      this.editor2d.render();
+      this.viewer3d.applyTransforms();
+    });
+
+    // 5. Actions rapides dans le tiroir mobile
+    document.getElementById('btn-mobile-recalc')?.addEventListener('click', () => {
+      this.recalculateOpeningsToFitCella(null, false);
+      this._setMobileSheetOpen(false);
+    });
+    document.getElementById('btn-mobile-open-generator')?.addEventListener('click', () => {
+      this._setMobileSheetOpen(false);
+      this.setMobileView('panel', 'generator');
+    });
+    document.getElementById('btn-mobile-export')?.addEventListener('click', () => {
+      this._setMobileSheetOpen(false);
+      document.getElementById('btn-export-json')?.click();
+    });
+    document.getElementById('btn-mobile-import')?.addEventListener('click', () => {
+      this._setMobileSheetOpen(false);
+      document.getElementById('input-import-json')?.click();
+    });
+
+    // 6. Réadaptation propre lors du passage portrait/paysage ou mobile<->desktop
+    this.mobileQuery.addEventListener('change', (e) => {
+      if (e.matches) {
+        this.setMobileView(this.mobileView || '3d');
+      } else {
+        requestAnimationFrame(() => {
+          this.editor2d.resize();
+          this.viewer3d.resize();
+        });
+      }
+    });
+  }
+
+  _renderMobileSelectionBar() {
+    const bar = document.getElementById('mobile-selection-bar');
+    if (!bar) return;
+
+    const p = this.pieces.find((item) => item.id === this.selectedId);
+    if (!p) {
+      bar.classList.add('hidden');
+      bar.innerHTML = '';
+      document.body.classList.remove('has-mobile-selection');
+      return;
+    }
+
+    const isCuttable = p.material !== 'plastic' && p.shape !== 'cylinder_y';
+    const isDone = this.cutDoneIds.has(p.id);
+    const dimsTxt = p.material === 'plastic'
+      ? `Plastique • ${Math.round(p.dx)}×${Math.round(p.dz)}×H${Math.round(p.dy)} mm`
+      : p.shape === 'prism_z'
+        ? `△ ${Math.round(p.cutW)}×${Math.round(p.cutH)} mm • ép. ${p.thickness} mm`
+        : `${Math.round(p.cutW)}×${Math.round(p.cutH)} mm • ép. ${p.thickness} mm`;
+
+    const onInspector = this.mobileView === 'panel' && this.activeSidebarTab === 'inspector';
+    const show3dBtn = this.mobileView !== '3d';
+    const show2dBtn = this.mobileView !== '2d';
+    const showInspBtn = !onInspector;
+
+    bar.classList.remove('hidden');
+    document.body.classList.add('has-mobile-selection');
+    bar.innerHTML = `
+      <div class="msb-info">
+        <div class="msb-title-row">
+          ${p.pieceNum ? `<span class="piece-num-badge">${formatPieceNum(p)}</span>` : ''}
+          <span class="msb-name">${p.name}</span>
+        </div>
+        <div class="msb-dims">${dimsTxt}</div>
+      </div>
+      <div class="msb-actions">
+        ${isCuttable ? `<button class="msb-btn ${isDone ? 'done' : ''}" data-msb="toggle-done" title="Marquer comme découpée">${isDone ? '✓' : '○'}</button>` : ''}
+        ${show3dBtn ? `<button class="msb-btn" data-msb="go-3d" title="Localiser en 3D">🧊</button>` : ''}
+        ${show2dBtn && !showInspBtn ? `<button class="msb-btn" data-msb="go-2d" title="Localiser en 2D">✏️</button>` : ''}
+        ${showInspBtn ? `<button class="msb-btn primary" data-msb="go-inspector" title="Inspecter &amp; éditer les cotes">📐</button>` : ''}
+        <button class="msb-btn" data-msb="clear" title="Désélectionner">✕</button>
+      </div>
+    `;
+
+    bar.querySelector('[data-msb="toggle-done"]')?.addEventListener('click', () => {
+      if (this.cutDoneIds.has(p.id)) this.cutDoneIds.delete(p.id);
+      else this.cutDoneIds.add(p.id);
+      this._saveState();
+      this._renderChecklist();
+      this._renderCutList();
+      this._renderMobileSelectionBar();
+    });
+    bar.querySelector('[data-msb="go-3d"]')?.addEventListener('click', () => {
+      this.setMobileView('3d');
+    });
+    bar.querySelector('[data-msb="go-2d"]')?.addEventListener('click', () => {
+      this.setMobileView('2d');
+    });
+    bar.querySelector('[data-msb="go-inspector"]')?.addEventListener('click', () => {
+      this.setMobileView('panel', 'inspector');
+    });
+    bar.querySelector('[data-msb="clear"]')?.addEventListener('click', () => {
+      this.selectPiece(null);
+    });
   }
 
   _syncToolButtons() {
@@ -849,51 +1065,74 @@ class TemplePlannerApp {
   }
 
   _renderGroupFilters() {
-    const container = document.getElementById('group-filters');
-    if (!container) return;
-    container.innerHTML = '';
+    const targets = [
+      document.getElementById('group-filters'),
+      document.getElementById('mobile-group-filters'),
+    ].filter(Boolean);
 
-    for (const [groupKey, meta] of Object.entries(GROUP_META)) {
+    let hiddenCount = 0;
+    for (const [groupKey] of Object.entries(GROUP_META)) {
       const count = this.pieces.filter((p) => p.group === groupKey).length;
       if (count === 0 && groupKey === 'custom') continue;
+      if (!this.editor2d.visibleGroups.has(groupKey)) hiddenCount++;
+    }
 
-      const active = this.editor2d.visibleGroups.has(groupKey);
-      const chip = document.createElement('button');
-      chip.className = `group-chip ${active ? 'active' : ''}`;
-      chip.innerHTML = `
-        <span class="dot" style="background:${meta.color}"></span>
-        <span>${meta.label}</span>
-        <span class="count">${count}</span>
-      `;
-      chip.addEventListener('click', () => {
-        if (this.editor2d.visibleGroups.has(groupKey)) {
-          this.editor2d.visibleGroups.delete(groupKey);
-          this.viewer3d.visibleGroups.delete(groupKey);
-        } else {
-          this.editor2d.visibleGroups.add(groupKey);
-          this.viewer3d.visibleGroups.add(groupKey);
-        }
-        this._renderGroupFilters();
-        this.editor2d.render();
-        this.viewer3d.applyTransforms();
-      });
-      container.appendChild(chip);
+    const badge = document.getElementById('mobile-filter-badge');
+    if (badge) {
+      badge.textContent = hiddenCount > 0 ? String(hiddenCount) : '';
+      badge.classList.toggle('hidden', hiddenCount === 0);
+    }
+
+    for (const container of targets) {
+      container.innerHTML = '';
+
+      for (const [groupKey, meta] of Object.entries(GROUP_META)) {
+        const count = this.pieces.filter((p) => p.group === groupKey).length;
+        if (count === 0 && groupKey === 'custom') continue;
+
+        const active = this.editor2d.visibleGroups.has(groupKey);
+        const chip = document.createElement('button');
+        chip.className = `group-chip ${active ? 'active' : ''}`;
+        chip.innerHTML = `
+          <span class="dot" style="background:${meta.color}"></span>
+          <span>${meta.label}</span>
+          <span class="count">${count}</span>
+        `;
+        chip.addEventListener('click', () => {
+          if (this.editor2d.visibleGroups.has(groupKey)) {
+            this.editor2d.visibleGroups.delete(groupKey);
+            this.viewer3d.visibleGroups.delete(groupKey);
+          } else {
+            this.editor2d.visibleGroups.add(groupKey);
+            this.viewer3d.visibleGroups.add(groupKey);
+          }
+          this._renderGroupFilters();
+          this.editor2d.render();
+          this.viewer3d.applyTransforms();
+        });
+        container.appendChild(chip);
+      }
     }
   }
 
   _renderLegend(mode) {
+    const html = mode === 'thickness'
+      ? Object.entries(THICKNESS_COLORS)
+          .filter(([t]) => Number(t) !== 5)
+          .map(([t, col]) => `<span class="legend-item"><i style="background:${col}"></i>Plaque ${t} mm</span>`)
+          .join('')
+      : Object.values(GROUP_META)
+          .map((m) => `<span class="legend-item"><i style="background:${m.color}"></i>${m.label}</span>`)
+          .join('');
+
     const el = document.getElementById('color-legend');
-    if (!el) return;
-    if (mode === 'thickness') {
-      el.innerHTML = Object.entries(THICKNESS_COLORS)
-        .filter(([t]) => Number(t) !== 5)
-        .map(([t, col]) => `<span class="legend-item"><i style="background:${col}"></i>Plaque ${t} mm</span>`)
-        .join('');
-    } else {
-      el.innerHTML = Object.values(GROUP_META)
-        .map((m) => `<span class="legend-item"><i style="background:${m.color}"></i>${m.label}</span>`)
-        .join('');
-    }
+    if (el) el.innerHTML = html;
+    const mobileEl = document.getElementById('mobile-color-legend');
+    if (mobileEl) mobileEl.innerHTML = html;
+
+    document.querySelectorAll('[data-mobile-color]').forEach((btn) => {
+      btn.classList.toggle('active', btn.dataset.mobileColor === mode);
+    });
   }
 
   // ============================================================================
@@ -1335,6 +1574,7 @@ class TemplePlannerApp {
         this._renderCutList();
         this._renderChecklist();
         this._updateGlobalStats();
+        this._renderMobileSelectionBar();
         this._saveState();
       });
     };
@@ -1747,10 +1987,14 @@ class TemplePlannerApp {
     const doneCount = cuttablePieces.filter((p) => this.cutDoneIds.has(p.id)).length;
     const pct = totalCount > 0 ? Math.round((doneCount / totalCount) * 100) : 0;
 
-    // Mettre à jour le petit compteur sur l'onglet "✅ Suivi"
+    // Mettre à jour le petit compteur sur l'onglet "✅ Suivi" (desktop + mobile)
     const tabBtn = document.getElementById('tab-btn-checklist');
     if (tabBtn) {
       tabBtn.innerHTML = doneCount > 0 ? `<span>✅</span><span>${doneCount}/${totalCount}</span>` : `<span>✅</span><span>Suivi</span>`;
+    }
+    const mobileChkLbl = document.getElementById('mobile-nav-checklist-lbl');
+    if (mobileChkLbl) {
+      mobileChkLbl.textContent = doneCount > 0 ? `${doneCount}/${totalCount}` : 'Suivi';
     }
 
     // Filtrage & tri
@@ -1870,6 +2114,7 @@ class TemplePlannerApp {
         this._saveState();
         this._renderChecklist();
         this._renderCutList();
+        this._renderMobileSelectionBar();
       }
     });
 
@@ -1883,6 +2128,7 @@ class TemplePlannerApp {
         this._saveState();
         this._renderChecklist();
         this._renderCutList();
+        this._renderMobileSelectionBar();
       });
     });
 

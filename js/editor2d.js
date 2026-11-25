@@ -32,9 +32,10 @@ export class Editor2D {
     this.sliceMin = 0;
     this.sliceMax = 500;
 
-    // État d'interaction souris
-    this.dragState = null; // { type: 'move'|'resize'|'pan'|'create', ... }
+    // État d'interaction souris & tactile
+    this.dragState = null; // { type: 'move'|'resize'|'pan'|'create'|'pinch'|'touch_pan_or_deselect', ... }
     this.spacePressed = false;
+    this.lastInputWasTouch = false;
 
     this._initEvents();
     this.resize();
@@ -68,6 +69,7 @@ export class Editor2D {
 
   resize() {
     const rect = this.canvas.parentElement.getBoundingClientRect();
+    if (rect.width < 10 || rect.height < 10) return;
     const dpr = window.devicePixelRatio || 1;
     this.canvas.width = Math.max(300, Math.floor(rect.width * dpr));
     this.canvas.height = Math.max(250, Math.floor(rect.height * dpr));
@@ -78,11 +80,11 @@ export class Editor2D {
   }
 
   fitView() {
-    if (!this.width || !this.height) return;
+    if (!this.width || !this.height || this.width < 10 || this.height < 10) return;
     const bounds = this.getSceneBounds2D();
     const bw = Math.max(100, bounds.maxU - bounds.minU);
     const bh = Math.max(100, bounds.maxV - bounds.minV);
-    const pad = 90;
+    const pad = this.width < 520 ? 48 : 90;
     const scaleX = (this.width - pad * 2) / bw;
     const scaleY = (this.height - pad * 2) / bh;
     this.zoom = Math.max(0.35, Math.min(4.0, Math.min(scaleX, scaleY)));
@@ -249,15 +251,22 @@ export class Editor2D {
     ];
   }
 
-  hitTestHandle(sx, sy) {
+  hitTestHandle(sx, sy, isTouch = this.lastInputWasTouch) {
     if (!this.selectedId) return null;
     const sel = this.pieces.find((p) => p.id === this.selectedId);
     if (!sel || !this.isPieceVisible(sel)) return null;
     const handles = this.getResizeHandles(sel);
+    const radius = isTouch ? 22 : 8;
+    let best = null;
+    let bestDist = Infinity;
     for (const h of handles) {
-      if (Math.hypot(sx - h.x, sy - h.y) <= 8) return h;
+      const d = Math.hypot(sx - h.x, sy - h.y);
+      if (d <= radius && d < bestDist) {
+        best = h;
+        bestDist = d;
+      }
     }
-    return null;
+    return best;
   }
 
   hitTestPiece(sx, sy) {
@@ -307,6 +316,7 @@ export class Editor2D {
     }, { passive: false });
 
     this.canvas.addEventListener('mousedown', (e) => {
+      this.lastInputWasTouch = false;
       const rect = this.canvas.getBoundingClientRect();
       const sx = e.clientX - rect.left;
       const sy = e.clientY - rect.top;
@@ -473,6 +483,252 @@ export class Editor2D {
       this.dragState = null;
       this.setTool(this.activeTool);
     });
+
+    // ==================== GESTES TACTILES (MOBILE / TABLETTE) ====================
+    const getTouchPoint = (touch) => {
+      const rect = this.canvas.getBoundingClientRect();
+      return { x: touch.clientX - rect.left, y: touch.clientY - rect.top };
+    };
+
+    const startPinch = (t0, t1) => {
+      const p0 = getTouchPoint(t0);
+      const p1 = getTouchPoint(t1);
+      const midX = (p0.x + p1.x) / 2;
+      const midY = (p0.y + p1.y) / 2;
+      const startDist = Math.max(10, Math.hypot(p1.x - p0.x, p1.y - p0.y));
+      this.dragState = {
+        type: 'pinch',
+        startDist,
+        startZoom: this.zoom,
+        startWorldMid: this.screenToWorld(midX, midY),
+      };
+    };
+
+    this.canvas.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      this.lastInputWasTouch = true;
+
+      if (e.touches.length >= 2) {
+        startPinch(e.touches[0], e.touches[1]);
+        this.render();
+        return;
+      }
+
+      if (e.touches.length !== 1) return;
+      const pt = getTouchPoint(e.touches[0]);
+      const sx = pt.x;
+      const sy = pt.y;
+
+      if (this.activeTool === 'pan') {
+        this.dragState = {
+          type: 'pan',
+          startX: sx,
+          startY: sy,
+          origPanX: this.panX,
+          origPanY: this.panY
+        };
+        return;
+      }
+
+      if (this.activeTool.startsWith('draw_')) {
+        const w = this.screenToWorld(sx, sy);
+        const su = this.snap(w.u);
+        const sv = this.snap(w.v);
+        this.dragState = {
+          type: 'create',
+          tool: this.activeTool,
+          startU: su,
+          startV: sv,
+          currU: su,
+          currV: sv,
+          startX: sx,
+          startY: sy,
+          dragged: false
+        };
+        this.render();
+        return;
+      }
+
+      // 1. Poignée de redimensionnement (zone élargie tactile 22 px)
+      const handle = this.hitTestHandle(sx, sy, true);
+      if (handle) {
+        const sel = this.pieces.find((p) => p.id === this.selectedId);
+        const r = this.getPieceRect2D(sel);
+        this.dragState = {
+          type: 'resize',
+          handle: handle.id,
+          piece: sel,
+          origRect: { ...r },
+          startX: sx,
+          startY: sy,
+          historyCommitted: false
+        };
+        return;
+      }
+
+      // 2. Sélection / déplacement d'une pièce (zone morte 7 px pour éviter tout décalage au tap)
+      const hit = this.hitTestPiece(sx, sy);
+      if (hit) {
+        this.selectedId = hit.id;
+        this.callbacks.onSelect?.(hit.id);
+        const w = this.screenToWorld(sx, sy);
+        const r = this.getPieceRect2D(hit);
+        this.dragState = {
+          type: 'move',
+          piece: hit,
+          startU: w.u,
+          startV: w.v,
+          startX: sx,
+          startY: sy,
+          origU: r.u,
+          origV: r.v,
+          moved: false,
+          historyCommitted: false
+        };
+        this.render();
+        return;
+      }
+
+      // 3. Fond vide en mode Éditer : glisser = panoramique fluide, tap simple = désélectionner
+      this.dragState = {
+        type: 'touch_pan_or_deselect',
+        startX: sx,
+        startY: sy,
+        origPanX: this.panX,
+        origPanY: this.panY,
+        moved: false
+      };
+    }, { passive: false });
+
+    this.canvas.addEventListener('touchmove', (e) => {
+      e.preventDefault();
+      if (!this.dragState) return;
+
+      if (e.touches.length >= 2) {
+        if (this.dragState.type !== 'pinch') {
+          startPinch(e.touches[0], e.touches[1]);
+        }
+        const p0 = getTouchPoint(e.touches[0]);
+        const p1 = getTouchPoint(e.touches[1]);
+        const midX = (p0.x + p1.x) / 2;
+        const midY = (p0.y + p1.y) / 2;
+        const curDist = Math.max(10, Math.hypot(p1.x - p0.x, p1.y - p0.y));
+        const nextZoom = Math.max(0.25, Math.min(8.0, this.dragState.startZoom * (curDist / this.dragState.startDist)));
+        this.zoom = nextZoom;
+        const wm = this.dragState.startWorldMid;
+        this.panX = midX - wm.u * this.zoom;
+        this.panY = this._isVerticalUp()
+          ? midY + wm.v * this.zoom
+          : midY - wm.v * this.zoom;
+        this.render();
+        return;
+      }
+
+      if (e.touches.length !== 1 || this.dragState.type === 'pinch') return;
+      const pt = getTouchPoint(e.touches[0]);
+      const sx = pt.x;
+      const sy = pt.y;
+
+      if (this.dragState.type === 'pan') {
+        this.panX = this.dragState.origPanX + (sx - this.dragState.startX);
+        this.panY = this.dragState.origPanY + (sy - this.dragState.startY);
+        this.render();
+        return;
+      }
+
+      if (this.dragState.type === 'touch_pan_or_deselect') {
+        if (!this.dragState.moved && Math.hypot(sx - this.dragState.startX, sy - this.dragState.startY) > 6) {
+          this.dragState.moved = true;
+        }
+        if (this.dragState.moved) {
+          this.panX = this.dragState.origPanX + (sx - this.dragState.startX);
+          this.panY = this.dragState.origPanY + (sy - this.dragState.startY);
+          this.render();
+        }
+        return;
+      }
+
+      const w = this.screenToWorld(sx, sy);
+
+      if (this.dragState.type === 'move') {
+        if (!this.dragState.moved) {
+          if (Math.hypot(sx - this.dragState.startX, sy - this.dragState.startY) < 7) return;
+          this.dragState.moved = true;
+          if (!this.dragState.historyCommitted) {
+            this.callbacks.onCommitHistory?.();
+            this.dragState.historyCommitted = true;
+          }
+        }
+        const du = w.u - this.dragState.startU;
+        const dv = w.v - this.dragState.startV;
+        const p = this.dragState.piece;
+        const r = this.getPieceRect2D(p);
+        this.setPieceRect2D(p, this.snap(this.dragState.origU + du), this.snap(this.dragState.origV + dv), r.du, r.dv);
+        this.callbacks.onPiecesChange?.(p);
+        this.render();
+        return;
+      }
+
+      if (this.dragState.type === 'resize') {
+        if (!this.dragState.historyCommitted) {
+          if (Math.hypot(sx - this.dragState.startX, sy - this.dragState.startY) < 3) return;
+          this.callbacks.onCommitHistory?.();
+          this.dragState.historyCommitted = true;
+        }
+        const { piece, handle, origRect } = this.dragState;
+        const su = this.snap(w.u);
+        const sv = this.snap(w.v);
+
+        let u1 = origRect.u;
+        let u2 = origRect.u + origRect.du;
+        let v1 = origRect.v;
+        let v2 = origRect.v + origRect.dv;
+        const isUp = this._isVerticalUp();
+
+        if (handle.includes('w')) u1 = Math.min(su, u2 - 2);
+        if (handle.includes('e')) u2 = Math.max(su, u1 + 2);
+        if (isUp) {
+          if (handle.includes('n')) v2 = Math.max(sv, v1 + 2);
+          if (handle.includes('s')) v1 = Math.min(sv, v2 - 2);
+        } else {
+          if (handle.includes('n')) v1 = Math.min(sv, v2 - 2);
+          if (handle.includes('s')) v2 = Math.max(sv, v1 + 2);
+        }
+
+        this.setPieceRect2D(piece, u1, v1, u2 - u1, v2 - v1);
+        this.callbacks.onPiecesChange?.(piece);
+        this.render();
+        return;
+      }
+
+      if (this.dragState.type === 'create') {
+        if (Math.hypot(sx - this.dragState.startX, sy - this.dragState.startY) > 8) {
+          this.dragState.dragged = true;
+        }
+        this.dragState.currU = this.snap(w.u);
+        this.dragState.currV = this.snap(w.v);
+        this.render();
+      }
+    }, { passive: false });
+
+    const endTouch = (e) => {
+      if (!this.dragState) return;
+      if (this.dragState.type === 'pinch') {
+        if (e.touches.length < 2) this.dragState = null;
+        return;
+      }
+      if (this.dragState.type === 'touch_pan_or_deselect' && !this.dragState.moved) {
+        this.selectedId = null;
+        this.callbacks.onSelect?.(null);
+        this.render();
+      } else if (this.dragState.type === 'create' && this.dragState.dragged) {
+        this._finalizeCreatePiece(this.dragState);
+      }
+      this.dragState = null;
+    };
+
+    this.canvas.addEventListener('touchend', endTouch, { passive: false });
+    this.canvas.addEventListener('touchcancel', () => { this.dragState = null; }, { passive: false });
   }
 
   _finalizeCreatePiece(state) {
@@ -902,13 +1158,15 @@ export class Editor2D {
 
   _drawHandles(ctx, p) {
     const handles = this.getResizeHandles(p);
+    const half = this.lastInputWasTouch ? 6.5 : 4.5;
+    const size = half * 2;
     ctx.save();
     for (const h of handles) {
       ctx.fillStyle = '#0f172a';
       ctx.strokeStyle = '#38bdf8';
-      ctx.lineWidth = 2;
+      ctx.lineWidth = this.lastInputWasTouch ? 2.4 : 2;
       ctx.beginPath();
-      ctx.rect(h.x - 4.5, h.y - 4.5, 9, 9);
+      ctx.rect(h.x - half, h.y - half, size, size);
       ctx.fill();
       ctx.stroke();
     }
@@ -917,12 +1175,30 @@ export class Editor2D {
 
   _drawAxisCompass(ctx) {
     const labels = {
-      XZ: { u: 'X (Longueur Arrière→Avant)', v: 'Z (Largeur Gauche→Droite)', title: 'VUE DE DESSUS (Plan XZ)' },
-      XY: { u: 'X (Longueur Arrière→Avant)', v: 'Y (Hauteur Sol→Toit)', title: 'VUE DE CÔTÉ (Élévation XY)' },
-      ZY: { u: 'Z (Largeur Gauche→Droite)', v: 'Y (Hauteur Sol→Toit)', title: 'VUE DE FACE (Façade ZY)' },
+      XZ: { u: 'X (Longueur Arrière→Avant)', v: 'Z (Largeur Gauche→Droite)', title: 'VUE DE DESSUS (Plan XZ)', short: 'Plan XZ (X × Z)' },
+      XY: { u: 'X (Longueur Arrière→Avant)', v: 'Y (Hauteur Sol→Toit)', title: 'VUE DE CÔTÉ (Élévation XY)', short: 'Côté XY (X × Y)' },
+      ZY: { u: 'Z (Largeur Gauche→Droite)', v: 'Y (Hauteur Sol→Toit)', title: 'VUE DE FACE (Façade ZY)', short: 'Face ZY (Z × Y)' },
     }[this.viewMode];
 
     ctx.save();
+    if (this.width < 520) {
+      const boxW = 128;
+      const bx = this.width - boxW - 10;
+      const by = 22;
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+      ctx.strokeStyle = 'rgba(148, 163, 184, 0.28)';
+      ctx.lineWidth = 1;
+      ctx.fillRect(bx, by, boxW, 24);
+      ctx.strokeRect(bx, by, boxW, 24);
+      ctx.fillStyle = '#38bdf8';
+      ctx.font = 'bold 10.5px Inter, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(labels.short, bx + boxW / 2, by + 12);
+      ctx.restore();
+      return;
+    }
+
     ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
     ctx.strokeStyle = 'rgba(148, 163, 184, 0.25)';
     ctx.lineWidth = 1;
