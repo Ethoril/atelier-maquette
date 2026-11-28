@@ -295,23 +295,29 @@ export function generateRomanTemple(params = DEFAULT_TEMPLE_PARAMS) {
     notes: 'Flanc droit encadrant l’escalier amovible'
   });
 
+  const stairStepH = Math.min(10, tStruct);
+  const stairBlockH = podiumH + tStruct; // 60 mm pour podium 70 mm : 6 marches de 10 mm + 7e montée de 10 mm sur le stylobate
+  const stairLayerCount = Math.max(1, Math.round(stairBlockH / stairStepH));
+
   pieces.push({
     id: nextPieceId('plug25'),
     name: 'Case #25 — Escalier Frontal Amovible',
     group: 'plugs',
     shape: 'stairs',
     x: podiumL - tPlug,
-    y: tStruct,
+    y: 0,
     z: stairWallW,
     dx: stairL + tPlug,
-    dy: podiumH + tStruct,
+    dy: stairBlockH,
     dz: stairOpeningW,
-    thickness: 20,
+    thickness: stairStepH,
+    plugDepth: tPlug,
+    baseStopH: tStruct,
     cutPlane: 'XZ',
     cutW: stairOpeningW,
     cutH: stairL + tPlug,
     adventNum: 25,
-    notes: `Bloc d'escalier amovible qui ferme l'ouverture de la Case #25 (${stairOpeningW} × ${podiumH} mm)`
+    notes: `Escalier amovible en ${stairLayerCount} tranches de ${stairStepH} mm empilées à plat (marches égales de ${stairStepH} mm jusqu'au podium à ${podiumTotalH} mm ; tranche 1 au sol en butée contre la semelle, tranches 2 à ${stairLayerCount} encastrées de ${tPlug} mm dans la Case #25)`
   });
 
   // ============================================================================
@@ -761,11 +767,75 @@ export function getThicknessProp(piece) {
   return 'dz';
 }
 
+/**
+ * Source de vérité unique pour la géométrie réelle de l'escalier (Plan 2D, Volume 3D, Liste de Découpe).
+ * Décompose le bloc d'escalier en tranches horizontales empilées d'épaisseur égale (par défaut 10 mm),
+ * avec une tranche basse en butée contre la semelle (sans encastrement) et les tranches supérieures
+ * qui s'encastrent de `plugDepth` mm dans la Case #25 sans toucher le stylobate.
+ */
+export function computeStairLayers(piece) {
+  const rawT = Number(piece.thickness) || 10;
+  const stepH = rawT <= 7 ? 6 : rawT <= 14 ? 10 : 20;
+  const totalH = Math.max(stepH, Math.round(piece.dy || 60));
+  const numLayers = Math.max(1, Math.round(totalH / stepH));
+  const totalDx = Math.max(15, Math.round(piece.dx || 65));
+  const dz = Math.max(10, Math.round(piece.dz || 170));
+
+  const rawPlug = Number.isFinite(Number(piece.plugDepth)) ? Math.round(Number(piece.plugDepth)) : 10;
+  const plugDepth = Math.max(0, Math.min(rawPlug, Math.max(0, totalDx - 15)));
+  const visibleRun = Math.max(10, totalDx - plugDepth);
+
+  const pieceY = Math.round(piece.y || 0);
+  const rawBaseStop = Number.isFinite(Number(piece.baseStopH))
+    ? Math.round(Number(piece.baseStopH))
+    : (pieceY === 0 ? 10 : 0);
+  const baseStopH = Math.max(0, rawBaseStop);
+
+  const layers = [];
+  for (let l = 0; l < numLayers; l++) {
+    const yOffset = l * stepH;
+    const worldBottomY = pieceY + yOffset;
+    const hasPlug = plugDepth > 0 && worldBottomY >= baseStopH;
+    const xOffset = hasPlug ? 0 : plugDepth;
+    const frontFromPodium = Math.max(8, Math.round((visibleRun * (numLayers - l)) / numLayers));
+    const depthX = (plugDepth + frontFromPodium) - xOffset;
+
+    layers.push({
+      index: l,
+      label: `${l + 1}/${numLayers}`,
+      xOffset,
+      yOffset,
+      dx: depthX,
+      dy: stepH,
+      dz,
+      frontFromPodium,
+      hasPlug,
+      plugDepth: hasPlug ? plugDepth : 0
+    });
+  }
+
+  return {
+    stepH,
+    numLayers,
+    stackedHeight: numLayers * stepH,
+    targetHeight: totalH,
+    heightMismatch: numLayers * stepH !== totalH,
+    plugDepth,
+    baseStopH,
+    visibleRun,
+    dz,
+    layers
+  };
+}
+
 export function recomputeCutDimensions(piece) {
   if (piece.shape === 'stairs') {
-    piece.thickness = 20;
+    const rawT = Number(piece.thickness) || 10;
+    piece.thickness = rawT <= 7 ? 6 : rawT <= 14 ? 10 : 20;
+    const spec = computeStairLayers(piece);
+    const maxDepth = Math.max(...spec.layers.map((l) => l.dx));
     piece.cutW = Math.round(piece.dz);
-    piece.cutH = Math.round(piece.dx);
+    piece.cutH = Math.round(maxDepth);
     return;
   }
   if (piece.shape === 'cylinder_y') {

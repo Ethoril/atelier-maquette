@@ -9,6 +9,7 @@ import {
   nextPieceId,
   recomputeCutDimensions,
   getThicknessProp,
+  computeStairLayers,
   ensurePieceNumbers,
   formatPieceNum
 } from './templeGenerator.js';
@@ -137,6 +138,12 @@ class TemplePlannerApp {
     }
     // Redécouper automatiquement en morceaux toutes les pièces qui dépassent une plaque 300 × 200 mm
     this.pieces = enforcePlateConstraintsAndSplit(this.pieces);
+    for (const p of this.pieces) {
+      if (p._migratedStairsV2) {
+        delete p._migratedStairsV2;
+        this.cutDoneIds.delete(p.id);
+      }
+    }
   }
 
   _recombineSplitCellaPieces() {
@@ -1489,6 +1496,32 @@ class TemplePlannerApp {
       .map(([k, v]) => `<option value="${k}" ${p.group === k ? 'selected' : ''}>${v.label}</option>`)
       .join('');
 
+    const stairSpec = p.shape === 'stairs' ? computeStairLayers(p) : null;
+    const stairGuideHtml = stairSpec ? `
+      <div class="cut-highlight-box" style="margin-top:8px;text-align:left;border-color:rgba(56,189,248,0.45);background:rgba(56,189,248,0.08);">
+        <div class="cut-title" style="color:#7dd3fc;display:flex;justify-content:space-between;">
+          <span>🪜 MONTAGE ESCALIER (${stairSpec.numLayers} TRANCHES × ${stairSpec.stepH} MM)</span>
+          <span>H = ${stairSpec.stackedHeight} mm</span>
+        </div>
+        ${stairSpec.heightMismatch ? `
+          <div style="font-size:11px;color:#fca5a5;margin:5px 0;font-weight:600;">
+            ⚠️ ${stairSpec.numLayers} × ${stairSpec.stepH} mm = ${stairSpec.stackedHeight} mm (≠ ${stairSpec.targetHeight} mm demandés). Passe l'épaisseur en 10 mm pour tomber juste !
+          </div>
+        ` : ''}
+        <div style="font-size:11px;color:#e2e8f0;margin-top:5px;line-height:1.45;">
+          ${stairSpec.layers.map((l) => {
+            const role = l.index === 0 && !l.hasPlug
+              ? 'bas au sol (butée semelle)'
+              : (l.hasPlug ? `alignée dos +${l.plugDepth} mm (bouchon #25)` : `marche ${l.index + 1}`);
+            return `<div>• <strong>${l.label}</strong> : <strong>${l.dz} × ${l.dx} mm</strong> <span style="color:#94a3b8;">(${role})</span></div>`;
+          }).join('')}
+        </div>
+        <div style="font-size:10.5px;color:#94a3b8;margin-top:6px;border-top:1px solid rgba(51,65,85,0.5);padding-top:5px;">
+          Astuce collage : empile les tranches avec bouchon bord à bord à l'arrière, puis pose-les sur la tranche 1/N en laissant dépasser ${stairSpec.plugDepth} mm derrière (le tenon qui rentre dans la Case #25). Le dessus du podium forme la dernière marche (+${stairSpec.stepH} mm).
+        </div>
+      </div>
+    ` : '';
+
     container.innerHTML = `
       ${plateSummaryCard}
       ${cellaSummaryCard}
@@ -1515,9 +1548,10 @@ class TemplePlannerApp {
         </div>
 
         <div class="cut-highlight-box">
-          <div class="cut-title">${p.material === 'plastic' ? 'PIÈCE EN PLASTIQUE FOURNIE (DIMENSIONS FIGÉES)' : `DÉCOUPE À PLAT (POLYSTYRÈNE ${p.thickness} MM)`}</div>
-          <div class="cut-dims">${p.material === 'plastic' ? `Base ${p.dx}×${p.dz} mm • Haut. ${p.dy} mm` : `${p.cutW} × ${p.cutH} mm <span class="cm-sub">(${(p.cutW / 10).toFixed(1)} × ${(p.cutH / 10).toFixed(1)} cm)</span>`}</div>
+          <div class="cut-title">${p.material === 'plastic' ? 'PIÈCE EN PLASTIQUE FOURNIE (DIMENSIONS FIGÉES)' : stairSpec ? `ESCALIER EN ${stairSpec.numLayers} TRANCHES (POLYSTYRÈNE ${stairSpec.stepH} MM)` : `DÉCOUPE À PLAT (POLYSTYRÈNE ${p.thickness} MM)`}</div>
+          <div class="cut-dims">${p.material === 'plastic' ? `Base ${p.dx}×${p.dz} mm • Haut. ${p.dy} mm` : stairSpec ? `${stairSpec.numLayers}× à plat • Larg. ${stairSpec.dz} mm <span class="cm-sub">(prof. ${stairSpec.layers[0].dx} → ${stairSpec.layers[stairSpec.numLayers - 1].dx} mm)</span>` : `${p.cutW} × ${p.cutH} mm <span class="cm-sub">(${(p.cutW / 10).toFixed(1)} × ${(p.cutH / 10).toFixed(1)} cm)</span>`}</div>
         </div>
+        ${stairGuideHtml}
 
         <div class="section-subtitle">Dimensions 3D dans l'espace (mm)</div>
         <div class="field-grid-3">
@@ -1564,6 +1598,8 @@ class TemplePlannerApp {
         if (prop === 'thickness' && p.shape !== 'stairs' && p.shape !== 'roof_slope' && p.shape !== 'cylinder_y') {
           const tProp = getThicknessProp(p);
           p[tProp] = Math.max(2, nextVal);
+          recomputeCutDimensions(p);
+        } else if (prop === 'thickness' && p.shape === 'stairs') {
           recomputeCutDimensions(p);
         } else if (['dx', 'dy', 'dz'].includes(prop)) {
           recomputeCutDimensions(p);
@@ -2003,7 +2039,7 @@ class TemplePlannerApp {
       if (this.checklistFilter === 'todo' && isDone) return false;
       if (this.checklistFilter === 'done' && !isDone) return false;
       if (this.checklistThickness !== 'all') {
-        const snapped = p.shape === 'stairs' ? 20 : snapToAllowedThickness(p.thickness || 10);
+        const snapped = snapToAllowedThickness(p.thickness || 10);
         if (String(snapped) !== this.checklistThickness) return false;
       }
       return true;
@@ -2011,8 +2047,8 @@ class TemplePlannerApp {
 
     list.sort((a, b) => {
       if (this.checklistSort === 'thickness') {
-        const ta = a.shape === 'stairs' ? 20 : snapToAllowedThickness(a.thickness || 10);
-        const tb = b.shape === 'stairs' ? 20 : snapToAllowedThickness(b.thickness || 10);
+        const ta = snapToAllowedThickness(a.thickness || 10);
+        const tb = snapToAllowedThickness(b.thickness || 10);
         if (tb !== ta) return tb - ta;
       }
       return (a.pieceNum || 0) - (b.pieceNum || 0);
@@ -2023,14 +2059,14 @@ class TemplePlannerApp {
       : list.map((p) => {
           const isDone = this.cutDoneIds.has(p.id);
           const isSel = p.id === this.selectedId;
-          const t = p.shape === 'stairs' ? 20 : snapToAllowedThickness(p.thickness || 10);
+          const t = snapToAllowedThickness(p.thickness || 10);
           const col = THICKNESS_COLORS[t] || '#a78bfa';
           const isTri = p.shape === 'prism_z';
           let dimsDesc = `${Math.max(p.cutW, p.cutH)} × ${Math.min(p.cutW, p.cutH)} mm`;
           if (isTri) dimsDesc = `△ ${p.cutW} × ${p.cutH} mm`;
           if (p.shape === 'stairs') {
-            const layers = Math.max(1, Math.round(p.dy / 20));
-            dimsDesc = `${layers} tranches (${p.cutW} × ${p.cutH} mm)`;
+            const stairSpec = computeStairLayers(p);
+            dimsDesc = `${stairSpec.numLayers} tranches × ${stairSpec.stepH} mm (larg. ${stairSpec.dz} mm)`;
           }
 
           return `

@@ -1,7 +1,7 @@
 // Calepinage automatique (2D Bin-Packing) sur plaques de polystyrène 300 × 200 mm,
 // support des pièces triangulaires (tête-bêche + rendu polygone), et redécoupage auto > 300 × 200 mm.
 
-import { nextPieceId, recomputeCutDimensions, getThicknessProp } from './templeGenerator.js';
+import { nextPieceId, recomputeCutDimensions, getThicknessProp, computeStairLayers } from './templeGenerator.js';
 
 export const PLATE_WIDTH = 300;
 export const PLATE_HEIGHT = 200;
@@ -39,10 +39,37 @@ export function enforcePlateConstraintsAndSplit(pieces) {
   // Ajuster d'abord les murets d'échiffre s'ils étaient à 25 mm pour les passer en 20 mm (et ajuster la largeur de l'escalier #25)
   const leftCheek = pieces.find((p) => p.name.includes('Muret d’Échiffre Gauche'));
   const rightCheek = pieces.find((p) => p.name.includes('Muret d’Échiffre Droit'));
-  const stairPlug = pieces.find((p) => p.adventNum === 25);
-  const podiumBase = pieces.find((p) => p.name.includes('Semelle basse du Podium'));
+  const stairPlug = pieces.find((p) => p.adventNum === 25 || p.shape === 'stairs');
+  const podiumBaseParts = pieces.filter((p) => p.name.includes('Semelle basse du Podium'));
+  const podiumTopParts = pieces.filter((p) => p.name.includes('Plancher haut Podium'));
+  const podiumBase = podiumBaseParts[0];
 
-  if (stairPlug && stairPlug.dy < 40) {
+  // Migration unique de l'ancien escalier (tranches de 20 mm / arrondi 80 mm / collision stylobate)
+  // vers un escalier en tranches égales de 10 mm posé au sol (y = 0) sous le stylobate.
+  if (stairPlug && stairPlug.shape === 'stairs' && stairPlug.plugDepth === undefined) {
+    const baseTopY = podiumBase ? Math.round(podiumBase.y + podiumBase.dy) : 10;
+    const topBottomY = podiumTopParts.length > 0 ? Math.round(podiumTopParts[0].y) : 60;
+    const podiumTotalH = podiumTopParts.length > 0
+      ? Math.round(podiumTopParts[0].y + podiumTopParts[0].dy)
+      : topBottomY + 10;
+    const podiumFrontX = podiumBaseParts.length > 0
+      ? Math.round(Math.max(...podiumBaseParts.map((b) => b.x + b.dx)))
+      : (leftCheek ? Math.round(leftCheek.x) : Math.round(stairPlug.x + 10));
+    const cheekDx = leftCheek ? Math.round(leftCheek.dx) : Math.max(20, Math.round(stairPlug.dx - 10));
+    const plugD = 10;
+
+    stairPlug.thickness = 10;
+    stairPlug.y = 0;
+    stairPlug.dy = Math.max(20, topBottomY);
+    stairPlug.x = podiumFrontX - plugD;
+    stairPlug.dx = cheekDx + plugD;
+    stairPlug.plugDepth = plugD;
+    stairPlug.baseStopH = baseTopY;
+    stairPlug._migratedStairsV2 = true;
+    const spec = computeStairLayers(stairPlug);
+    stairPlug.notes = `Escalier amovible en ${spec.numLayers} tranches de ${spec.stepH} mm empilées à plat (marches égales de ${spec.stepH} mm jusqu'au podium à ${podiumTotalH} mm ; tranche 1 au sol en butée contre la semelle, tranches 2 à ${spec.numLayers} encastrées de ${spec.plugDepth} mm dans la Case #25)`;
+    recomputeCutDimensions(stairPlug);
+  } else if (stairPlug && stairPlug.dy < 40) {
     stairPlug.dy = 60;
   }
 
@@ -279,19 +306,23 @@ export function expandPiecesToCutItems(pieces) {
     const rawT = Number(p.thickness) || 10;
     const t = snapToAllowedThickness(rawT);
 
-    // Bloc d'escalier #25 : décomposé en tranches empilées de 20 mm
+    // Bloc d'escalier #25 : décomposé en tranches horizontales empilées identiques au plan 2D/3D
     if (p.shape === 'stairs') {
-      const numLayers = Math.max(1, Math.round(p.dy / 20));
-      for (let l = 0; l < numLayers; l++) {
-        const ratio = (numLayers - l) / numLayers;
-        const stepDepth = Math.max(15, Math.round(p.dx * ratio));
-        const w = Math.max(Math.round(p.dz), stepDepth);
-        const h = Math.min(Math.round(p.dz), stepDepth);
-        byThickness[20].push({
+      const spec = computeStairLayers(p);
+      const sliceT = spec.stepH;
+      for (const layer of spec.layers) {
+        const w = Math.max(Math.round(layer.dz), Math.round(layer.dx));
+        const h = Math.min(Math.round(layer.dz), Math.round(layer.dx));
+        const role = layer.index === 0 && !layer.hasPlug
+          ? 'bas, au sol, butée semelle'
+          : layer.index === spec.numLayers - 1
+            ? (layer.hasPlug ? `haut + bouchon ${layer.plugDepth} mm` : 'haut')
+            : (layer.hasPlug ? `marche ${layer.index + 1} + bouchon ${layer.plugDepth} mm` : `marche ${layer.index + 1}`);
+        byThickness[sliceT].push({
           id: p.id,
           pieceNum: p.pieceNum,
-          sliceLabel: `${l + 1}/${numLayers}`,
-          name: `Escalier #25 (Tranche ${l + 1}/${numLayers})`,
+          sliceLabel: layer.label,
+          name: `Escalier #25 — Tranche ${layer.label} (${role})`,
           shape: 'stairs_slice',
           kind: 'rect',
           w,

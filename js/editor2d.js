@@ -1,7 +1,7 @@
 // Éditeur de plans 2D multi-vues (Dessus XZ, Côté XY, Face ZY) avec cotes en mm,
 // déplacement/redimensionnement par poignées et outils de création de pièces 2D -> 3D.
 
-import { THICKNESS_COLORS, GROUP_META, nextPieceId, recomputeCutDimensions } from './templeGenerator.js';
+import { THICKNESS_COLORS, GROUP_META, nextPieceId, recomputeCutDimensions, computeStairLayers } from './templeGenerator.js';
 
 export class Editor2D {
   constructor(canvas, callbacks) {
@@ -978,24 +978,99 @@ export class Editor2D {
       ctx.beginPath();
       ctx.arc(x + w / 2, y + h / 2, (Math.min(w, h) / 2) * 0.76, 0, Math.PI * 2);
       ctx.stroke();
-    } else {
-      // Rectangle standard (ou escalier en profil)
-      ctx.fillRect(x, y, w, h);
+    } else if (p.shape === 'stairs') {
+      // Profil / dessus / face exact de l'escalier en tranches horizontales empilées
+      const spec = computeStairLayers(p);
+      const strokeCol = isSelected ? '#38bdf8' : isHovered ? '#f8fafc' : 'rgba(15, 23, 42, 0.85)';
+      const baseAlpha = ctx.globalAlpha;
 
-      // Si c'est l'escalier #25 en vue de Côté (XY), dessiner le profil des marches
-      if (p.shape === 'stairs' && this.viewMode === 'XY') {
+      if (this.viewMode === 'XY') {
+        // Vue de Côté : dessiner chaque tranche horizontale à sa position et épaisseur exactes
+        for (const layer of spec.layers) {
+          const lp1 = this.worldToScreen(p.x + layer.xOffset, p.y + layer.yOffset);
+          const lp2 = this.worldToScreen(p.x + layer.xOffset + layer.dx, p.y + layer.yOffset + layer.dy);
+          const lx = Math.min(lp1.x, lp2.x);
+          const ly = Math.min(lp1.y, lp2.y);
+          const lw = Math.abs(lp2.x - lp1.x);
+          const lh = Math.abs(lp2.y - lp1.y);
+
+          ctx.globalAlpha = baseAlpha;
+          ctx.fillStyle = baseColor;
+          ctx.fillRect(lx, ly, lw, lh);
+
+          ctx.globalAlpha = 1;
+          ctx.lineWidth = isSelected ? 2 : 1;
+          ctx.strokeStyle = strokeCol;
+          ctx.strokeRect(lx, ly, lw, lh);
+        }
+
+        // Repère vertical pointillé entre la partie bouchon (dans Case #25) et les marches visibles
+        if (spec.plugDepth > 0) {
+          const seam = this.worldToScreen(p.x + spec.plugDepth, p.y);
+          const seamTop = this.worldToScreen(p.x + spec.plugDepth, p.y + spec.stackedHeight);
+          ctx.save();
+          ctx.globalAlpha = 0.75;
+          ctx.strokeStyle = '#0f172a';
+          ctx.lineWidth = 1.2;
+          ctx.setLineDash([3, 2]);
+          ctx.beginPath();
+          ctx.moveTo(seam.x, seam.y);
+          ctx.lineTo(seamTop.x, seamTop.y);
+          ctx.stroke();
+          ctx.restore();
+        }
+      } else if (this.viewMode === 'XZ') {
+        // Vue de Dessus : emprise + arêtes de chaque nez de marche
+        ctx.fillRect(x, y, w, h);
+        ctx.globalAlpha = 1;
         ctx.strokeStyle = 'rgba(15, 23, 42, 0.55)';
-        ctx.lineWidth = 1.2;
-        const steps = 5;
+        ctx.lineWidth = 1;
         ctx.beginPath();
-        for (let s = 1; s < steps; s++) {
-          const sx = x + (w * s) / steps;
-          const sy = y + (h * s) / steps;
-          ctx.moveTo(sx, sy);
-          ctx.lineTo(x + w, sy);
+        for (const layer of spec.layers) {
+          const sx = this.worldToScreen(p.x + layer.xOffset + layer.dx, p.z).x;
+          ctx.moveTo(sx, y);
+          ctx.lineTo(sx, y + h);
         }
         ctx.stroke();
+
+        if (spec.plugDepth > 0) {
+          const seamX = this.worldToScreen(p.x + spec.plugDepth, p.z).x;
+          ctx.save();
+          ctx.setLineDash([4, 3]);
+          ctx.strokeStyle = '#0f172a';
+          ctx.beginPath();
+          ctx.moveTo(seamX, y);
+          ctx.lineTo(seamX, y + h);
+          ctx.stroke();
+          ctx.restore();
+        }
+
+        ctx.lineWidth = isSelected ? 2.5 : isHovered ? 1.8 : 1;
+        ctx.strokeStyle = strokeCol;
+        ctx.strokeRect(x, y, w, h);
+      } else {
+        // Vue de Face (ZY) : chaque contremarche horizontale à sa hauteur réelle
+        for (const layer of spec.layers) {
+          const lp1 = this.worldToScreen(p.z, p.y + layer.yOffset);
+          const lp2 = this.worldToScreen(p.z + p.dz, p.y + layer.yOffset + layer.dy);
+          const lx = Math.min(lp1.x, lp2.x);
+          const ly = Math.min(lp1.y, lp2.y);
+          const lw = Math.abs(lp2.x - lp1.x);
+          const lh = Math.abs(lp2.y - lp1.y);
+
+          ctx.globalAlpha = baseAlpha;
+          ctx.fillStyle = baseColor;
+          ctx.fillRect(lx, ly, lw, lh);
+
+          ctx.globalAlpha = 1;
+          ctx.lineWidth = isSelected ? 2 : 1;
+          ctx.strokeStyle = strokeCol;
+          ctx.strokeRect(lx, ly, lw, lh);
+        }
       }
+    } else {
+      // Rectangle standard
+      ctx.fillRect(x, y, w, h);
 
       ctx.globalAlpha = 1;
       ctx.lineWidth = isSelected ? 2.5 : isHovered ? 1.8 : 1;

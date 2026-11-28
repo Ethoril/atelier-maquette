@@ -3,7 +3,7 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { THICKNESS_COLORS, GROUP_META } from './templeGenerator.js';
+import { THICKNESS_COLORS, GROUP_META, computeStairLayers } from './templeGenerator.js';
 
 export class Viewer3D {
   constructor(container, callbacks) {
@@ -294,6 +294,35 @@ export class Viewer3D {
     return tex;
   }
 
+  _getStairFrontTexture(adventNum, pieceNum, bgColor) {
+    const key = `stair_front_${adventNum}_${pieceNum || 0}_${bgColor}`;
+    if (this.numberTextureCache.has(key)) return this.numberTextureCache.get(key);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 48;
+    const ctx = canvas.getContext('2d');
+
+    ctx.fillStyle = bgColor;
+    ctx.fillRect(0, 0, 256, 48);
+
+    ctx.strokeStyle = 'rgba(15, 23, 42, 0.4)';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(3, 3, 250, 42);
+
+    ctx.fillStyle = '#0f172a';
+    ctx.font = '800 24px Inter, Georgia, serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const txt = pieceNum ? `#${adventNum}  •  P${pieceNum}` : `#${adventNum}`;
+    ctx.fillText(txt, 128, 25);
+
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    this.numberTextureCache.set(key, tex);
+    return tex;
+  }
+
   _getPieceFaceTexture(pieceNum, bgColor) {
     const key = `face_${pieceNum}_${bgColor}`;
     if (this.numberTextureCache.has(key)) return this.numberTextureCache.get(key);
@@ -484,24 +513,26 @@ export class Viewer3D {
       edges.rotation.copy(mesh.rotation);
       group.add(mesh, edges);
     } else if (p.shape === 'stairs') {
-      // Bloc d'escalier amovible (Case #25) composé de 5 marches
-      const steps = 5;
-      const stepDx = p.dx / steps;
-      const stepDy = p.dy / steps;
-      for (let s = 0; s < steps; s++) {
-        const curH = p.dy - s * stepDy;
-        const stepGeom = new THREE.BoxGeometry(stepDx, curH, p.dz);
-        const isFrontStep = s === steps - 1;
+      // Bloc d'escalier amovible (Case #25) : tranches horizontales empilées identiques au calepinage
+      const spec = computeStairLayers(p);
+      for (const layer of spec.layers) {
+        const stepGeom = new THREE.BoxGeometry(layer.dx, layer.dy, p.dz);
+        const isFrontStep = layer.index === 0;
         let mat = baseMat;
         if (isFrontStep && p.adventNum) {
-          const numTex = this._getNumberTexture(p.adventNum, p.pieceNum, colorHex);
-          const numMat = new THREE.MeshStandardMaterial({ map: numTex, roughness: 0.6 });
+          const numTex = this._getStairFrontTexture(p.adventNum, p.pieceNum, colorHex);
+          const numMat = new THREE.MeshStandardMaterial({
+            map: numTex,
+            roughness: 0.6,
+            transparent: isTransparent,
+            opacity: isTransparent ? 0.45 : 1.0
+          });
           mat = [numMat, baseMat, baseMat, baseMat, baseMat, baseMat];
         }
         const stepMesh = new THREE.Mesh(stepGeom, mat);
         stepMesh.position.set(
-          -p.dx / 2 + stepDx * (s + 0.5),
-          -p.dy / 2 + curH / 2,
+          -p.dx / 2 + layer.xOffset + layer.dx / 2,
+          -p.dy / 2 + layer.yOffset + layer.dy / 2,
           0
         );
         stepMesh.castShadow = true;
